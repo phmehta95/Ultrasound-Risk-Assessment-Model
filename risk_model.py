@@ -25,7 +25,8 @@ date_cols = [
     "Purchase Date",
     "Installation Date",
     "Battery Last Replaced",
-    "Battery Last Checked"
+    "Battery Last Checked",
+    "Support Level"
 ]
 #Conversion into NaT (Not A Time) so it doesn't throw an error and mess up dataframe
 for col in date_cols:
@@ -38,7 +39,10 @@ processed_df = pd.DataFrame()
 processed_df["Equipment No"] = df["Equipment No"]
 processed_df["Serial No"] = df["Serial No"]
 
-#Relevant variables
+################################################
+###########Relevant variables###################
+################################################
+
 # Time from last repair date (Today - Last Repair Date)
 processed_df["Days_Since_Last_Repair"] = (
     today - df["Last Repair Date"]
@@ -70,6 +74,32 @@ processed_df["Days_Since_Battery_Checked"] = (
     today - df["Battery Last Checked"]
 ).dt.days
 
+
+#Support level (with strings cleaned)
+processed_df["Support_Level"] = df["Support Level"].astype(str).str.strip()
+
+#Define support levels to help produce risk flag 
+low_risk_support = {
+    "Full In-House Support (On KPI) <DASH>",
+    "Full External Contract",
+}
+high_risk_support = {
+    "Repairs/EST Only (No PPM)",
+}
+
+
+def map_support_tier(val):
+    if val in low_risk_support:
+        return "Lower_Risk_Support"
+    elif val in high_risk_support:
+        return "Higher_Risk_Support"
+    else:
+        return np.nan
+
+processed_df["Support_Tier"] = processed_df["Support_Level"].apply(
+    map_support_tier
+)
+
 # Save processed DataFrame to new Excel file
 processed_df.to_excel("model_input_metrics.xlsx", index=False)
 
@@ -78,18 +108,19 @@ processed_df.to_excel("model_input_metrics.xlsx", index=False)
 processed_df["Risk_Flag"] = (
     (processed_df["Days_Since_Installation"] > 2920 ) #Risk flag = 1 if number of days since installation is greater than 8 years
     | (processed_df["Days_Since_Last_PPM"] > 365) #Risk flag = 1 for greater than a year since last PPM
-
+    |   (processed_df["Support_Level"] == "Repairs Only") #Risk flag = 1 for Support Level - Repairs Only
+    |       (processed_df["Support_Tier"] == "Higher_Risk_Support")
 ).astype(int)
 
 #Remove rows containing missing information
 model_data = processed_df.dropna(
-subset=["Days_Since_Installation", "Days_Since_Last_PPM", "Risk_Flag"]
+subset=["Days_Since_Installation", "Days_Since_Last_PPM", "Support_Level", "Risk_Flag"]
 )
 #print(processed_df["Risk_Flag"].value_counts())
 
 #3. Define the Bayesian Model using Bambi
 model = bmb.Model(
-    formula = "Risk_Flag ~ Days_Since_Installation + Days_Since_Last_PPM",
+    formula = "Risk_Flag ~ Days_Since_Installation + Days_Since_Last_PPM + Support_Level",
     data = model_data,
     family = "bernoulli",
 )
